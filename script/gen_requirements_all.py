@@ -24,7 +24,6 @@ COMMENT_REQUIREMENTS = (
     "decora",
     "decora_wifi",
     "envirophat",
-    "evdev",
     "face_recognition",
     "i2csense",
     "opencv-python-headless",
