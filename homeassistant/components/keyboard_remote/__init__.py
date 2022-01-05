@@ -4,9 +4,10 @@ import asyncio
 from contextlib import suppress
 import logging
 import os
+from time import time
 
 import aionotify
-from evdev import InputDevice, categorize, ecodes, list_devices
+from evdev import InputDevice, KeyEvent, categorize, ecodes, list_devices
 import voluptuous as vol
 
 from homeassistant.const import EVENT_HOMEASSISTANT_START, EVENT_HOMEASSISTANT_STOP
@@ -22,6 +23,7 @@ DOMAIN = "keyboard_remote"
 ICON = "mdi:remote"
 
 KEY_CODE = "key_code"
+KEY_NAME = "key_name"
 KEY_VALUE = {"key_up": 0, "key_down": 1, "key_hold": 2}
 KEY_VALUE_NAME = {value: key for key, value in KEY_VALUE.items()}
 KEYBOARD_REMOTE_COMMAND_RECEIVED = "keyboard_remote_command_received"
@@ -29,6 +31,7 @@ KEYBOARD_REMOTE_CONNECTED = "keyboard_remote_connected"
 KEYBOARD_REMOTE_DISCONNECTED = "keyboard_remote_disconnected"
 
 TYPE = "type"
+DURATION = "duration"
 EMULATE_KEY_HOLD = "emulate_key_hold"
 EMULATE_KEY_HOLD_DELAY = "emulate_key_hold_delay"
 EMULATE_KEY_HOLD_REPEAT = "emulate_key_hold_repeat"
@@ -218,8 +221,9 @@ class KeyboardRemote:
 
             self.hass = hass
 
-            key_types = dev_block.get(TYPE)
+            self.keymap = {}
 
+            key_types = dev_block.get(TYPE)
             self.key_values = set()
             for key_type in key_types:
                 self.key_values.add(KEY_VALUE[key_type])
@@ -230,21 +234,49 @@ class KeyboardRemote:
             self.monitor_task = None
             self.dev = None
 
+        def get_key(self, code):
+            """Return tracking for key with code."""
+            code = int(code)
+
+            if code not in self.keymap:
+                self.keymap[code] = {
+                    "code": code,
+                    "name": str(code),
+                    "started": 0,
+                    "repeat": None,
+                }
+
+            return self.keymap[code]
+
         async def async_keyrepeat(self, path, name, code, delay, repeat):
             """Emulate keyboard delay/repeat behaviour by sending key events on a timer."""
-
             await asyncio.sleep(delay)
             while True:
+                key = self.get_key(code)
                 self.hass.bus.async_fire(
                     KEYBOARD_REMOTE_COMMAND_RECEIVED,
                     {
                         KEY_CODE: code,
+                        KEY_NAME: key["name"],
                         TYPE: "key_hold",
+                        DURATION: round(time() - key["started"], 3),
                         DEVICE_DESCRIPTOR: path,
                         DEVICE_NAME: name,
                     },
                 )
                 await asyncio.sleep(repeat)
+
+        async def async_cancel_keyrepeat(self, code):
+            """Cancel emulated keyboard repeat."""
+            key = self.keymap[code]
+
+            try:
+                key["repeat"].cancel()
+                await key["repeat"]
+            except (asyncio.CancelledError, AttributeError):
+                pass
+
+            key["repeat"] = None
 
         async def async_start_monitoring(self, dev):
             """Start event monitoring task and issue event."""
@@ -279,6 +311,7 @@ class KeyboardRemote:
                 )
                 _LOGGER.debug("Keyboard disconnected, %s", self.dev.name)
                 self.dev = None
+                self.keymap = {}
 
         async def async_monitor_input(self, dev):
             """Event monitoring loop.
@@ -286,49 +319,67 @@ class KeyboardRemote:
             Monitor one device for new events using evdev with asyncio,
             start and stop key hold emulation tasks as needed.
             """
-
-            repeat_tasks = {}
-
             try:
                 _LOGGER.debug("Start device monitoring")
                 await self.hass.async_add_executor_job(dev.grab)
                 async for event in dev.async_read_loop():
                     if event.type is ecodes.EV_KEY:
+                        key = self.get_key(event.code)
+
+                        curtime = time()
+
+                        if event.value == KEY_VALUE["key_down"]:
+                            # start a timer for key press duration
+                            key["started"] = curtime
+
                         if event.value in self.key_values:
-                            _LOGGER.debug(categorize(event))
+                            if (
+                                self.emulate_key_hold
+                                and event.value == KEY_VALUE["key_hold"]
+                            ):
+                                # ignore key_hold event coming from device when emulating
+                                continue
+
+                            key_event = categorize(event)
+                            _LOGGER.debug(key_event)
+
+                            if isinstance(key_event, KeyEvent):
+                                # normalize name (e.g. KEY_SPACE to space)
+                                keycode = key_event.keycode
+                                if isinstance(keycode, list):
+                                    keycode = keycode[-1]
+                                key["name"] = keycode.lower().replace("key_", "")
+
+                            duration = round(curtime - key["started"], 3)
+
                             self.hass.bus.async_fire(
                                 KEYBOARD_REMOTE_COMMAND_RECEIVED,
                                 {
                                     KEY_CODE: event.code,
+                                    KEY_NAME: key["name"],
                                     TYPE: KEY_VALUE_NAME[event.value],
+                                    DURATION: duration,
                                     DEVICE_DESCRIPTOR: dev.path,
                                     DEVICE_NAME: dev.name,
                                 },
                             )
 
-                        if (
-                            event.value == KEY_VALUE["key_down"]
-                            and self.emulate_key_hold
-                        ):
-                            repeat_tasks[event.code] = self.hass.async_create_task(
-                                self.async_keyrepeat(
-                                    dev.path,
-                                    dev.name,
-                                    event.code,
-                                    self.emulate_key_hold_delay,
-                                    self.emulate_key_hold_repeat,
+                        if self.emulate_key_hold:
+                            if key["repeat"]:
+                                await self.async_cancel_keyrepeat(event.code)
+
+                            if event.value == KEY_VALUE["key_down"]:
+                                key["repeat"] = self.hass.async_create_task(
+                                    self.async_keyrepeat(
+                                        dev.path,
+                                        dev.name,
+                                        event.code,
+                                        self.emulate_key_hold_delay,
+                                        self.emulate_key_hold_repeat,
+                                    )
                                 )
-                            )
-                        elif (
-                            event.value == KEY_VALUE["key_up"]
-                            and event.code in repeat_tasks
-                        ):
-                            repeat_tasks[event.code].cancel()
-                            del repeat_tasks[event.code]
             except (OSError, asyncio.CancelledError):
                 # cancel key repeat tasks
-                for task in repeat_tasks.values():
-                    task.cancel()
-
-                if repeat_tasks:
-                    await asyncio.wait(repeat_tasks.values())
+                for key in self.keymap.values():
+                    if key["repeat"]:
+                        await self.async_cancel_keyrepeat(key["code"])

@@ -27,6 +27,10 @@ KEY_DOWN = KEY_VALUE["key_down"]
 KEY_UP = KEY_VALUE["key_up"]
 KEY_HOLD = KEY_VALUE["key_hold"]
 
+KEY_F1 = 59
+KEY_F2 = 60
+KEY_F3 = 61
+
 
 async def test_config_empty(hass: HomeAssistant) -> None:
     """Test setup ignored with empty config."""
@@ -136,80 +140,99 @@ async def test_command_basic(
     hass: HomeAssistant, mock_manager: MockManager, keyboard_remote: None
 ) -> None:
     """Test keyboard commands."""
-    data: dict[str, str] = {}
+    data: dict[str, str | int] = {}
     signal = create_bus_signal(hass, KEYBOARD_REMOTE_COMMAND_RECEIVED, data)
 
     # Test event1 key_down ignored (since event1 not being listened to)
     signal.clear()
-    mock_manager.create_evdev_event("/dev/input/event1", 32, KEY_DOWN)
+    mock_manager.create_evdev_event("/dev/input/event1", KEY_F1, KEY_DOWN)
     with pytest.raises(asyncio.TimeoutError):
         await asyncio.wait_for(signal.wait(), 0.05)
 
     # Test event2 key_down received
-    mock_manager.create_evdev_event("/dev/input/event2", 30, KEY_DOWN)
+    mock_manager.create_evdev_event("/dev/input/event2", KEY_F1, KEY_DOWN)
     await asyncio.wait_for(signal.wait(), 0.2)
-    assert data["key_code"] == 30
+    assert data["key_code"] == KEY_F1
+    assert data["key_name"] == "f1"
     assert data["type"] == "key_down"
     assert data["device_descriptor"] == "/dev/input/event2"
     assert data["device_name"] == "Test USB Keyboard"
+    assert data["duration"] == 0
 
     # Test event2 key_hold received
     signal.clear()
-    mock_manager.create_evdev_event("/dev/input/event2", 30, KEY_HOLD)
+    mock_manager.create_evdev_event("/dev/input/event2", KEY_F1, KEY_HOLD)
     await asyncio.wait_for(signal.wait(), 0.2)
-    assert data["key_code"] == 30
+    assert data["key_code"] == KEY_F1
+    assert data["key_name"] == "f1"
     assert data["type"] == "key_hold"
     assert data["device_descriptor"] == "/dev/input/event2"
     assert data["device_name"] == "Test USB Keyboard"
+    assert data["duration"] > 0
+    duration = data["duration"]
 
     # Test repeated event2 key_hold received
     signal.clear()
-    mock_manager.create_evdev_event("/dev/input/event2", 30, KEY_HOLD)
+    mock_manager.create_evdev_event("/dev/input/event2", KEY_F1, KEY_HOLD)
     await asyncio.wait_for(signal.wait(), 0.2)
-    assert data["key_code"] == 30
+    assert data["key_code"] == KEY_F1
+    assert data["key_name"] == "f1"
     assert data["type"] == "key_hold"
     assert data["device_descriptor"] == "/dev/input/event2"
     assert data["device_name"] == "Test USB Keyboard"
+    assert data["duration"] > duration
+    duration = data["duration"]
 
     # Test event2 key_up received
     signal.clear()
-    mock_manager.create_evdev_event("/dev/input/event2", 30, KEY_UP)
+    mock_manager.create_evdev_event("/dev/input/event2", KEY_F1, KEY_UP)
     await asyncio.wait_for(signal.wait(), 0.2)
-    assert data["key_code"] == 30
+    assert data["key_code"] == KEY_F1
+    assert data["key_name"] == "f1"
     assert data["type"] == "key_up"
     assert data["device_descriptor"] == "/dev/input/event2"
     assert data["device_name"] == "Test USB Keyboard"
+    assert data["duration"] > duration
 
     # Test event3 key_down received
     signal.clear()
-    mock_manager.create_evdev_event("/dev/input/event3", 31, KEY_DOWN)
+    mock_manager.create_evdev_event("/dev/input/event3", KEY_F2, KEY_DOWN)
     await asyncio.wait_for(signal.wait(), 0.2)
-    assert data["key_code"] == 31
+    assert data["key_code"] == KEY_F2
+    assert data["key_name"] == "f2"
     assert data["type"] == "key_down"
     assert data["device_descriptor"] == "/dev/input/event3"
     assert data["device_name"] == "Test USB System Control"
+    assert data["duration"] == 0
 
     # Test event3 key_up ignored (since event3 key_up not being listened to)
     signal.clear()
-    mock_manager.create_evdev_event("/dev/input/event3", 32, KEY_UP)
+    mock_manager.create_evdev_event("/dev/input/event3", KEY_F3, KEY_UP)
     with pytest.raises(asyncio.TimeoutError):
         await asyncio.wait_for(signal.wait(), 0.05)
 
     # Test named event4 key_down received
-    mock_manager.create_evdev_event("/dev/input/event4", 30, KEY_DOWN)
+    mock_manager.create_evdev_event("/dev/input/event4", KEY_F1, KEY_DOWN)
     await asyncio.wait_for(signal.wait(), 0.2)
-    assert data["key_code"] == 30
+    assert data["key_code"] == KEY_F1
+    assert data["key_name"] == "f1"
     assert data["type"] == "key_down"
     assert data["device_descriptor"] == "/dev/input/event4"
     assert data["device_name"] == "Test Named USB Keyboard"
 
     # Test symlinked event5 key_down works
     signal.clear()
-    mock_manager.create_evdev_event("/dev/input/event5", 32, KEY_DOWN)
+    mock_manager.create_evdev_event("/dev/input/event5", KEY_F3, KEY_DOWN)
     await asyncio.wait_for(signal.wait(), 0.2)
-    assert data["key_code"] == 32
+    assert data["key_code"] == KEY_F3
+    assert data["key_name"] == "f3"
     assert data["device_descriptor"] == "/dev/input/event5"
     assert data["device_name"] == "Test Symlinked USB Keyboard"
+
+    # Ensure coverage when receiving keys with multiple values (like mute (113))
+    signal.clear()
+    mock_manager.create_evdev_event("/dev/input/event2", 113, KEY_UP)
+    await asyncio.wait_for(signal.wait(), 0.2)
 
 
 @pytest.mark.parametrize(
@@ -222,7 +245,7 @@ async def test_command_basic(
             [  # keyboard_remote config
                 {
                     "device_descriptor": "/dev/input/event2",
-                    "type": ["key_down", "key_up"],
+                    "type": ["key_down", "key_up", "key_hold"],
                     "emulate_key_hold_repeat": 0.1,
                     "emulate_key_hold": True,
                     "emulate_key_hold_delay": 0.01,
@@ -240,30 +263,36 @@ async def test_command_emulated_hold(
     signal = create_bus_signal(hass, KEYBOARD_REMOTE_COMMAND_RECEIVED, data)
 
     # Test event2 key_down
-    mock_manager.create_evdev_event("/dev/input/event2", 30, KEY_DOWN)
+    mock_manager.create_evdev_event("/dev/input/event2", KEY_F1, KEY_DOWN)
     await asyncio.wait_for(signal.wait(), 0.2)
-    assert data["key_code"] == 30
+    assert data["key_code"] == KEY_F1
     assert data["type"] == "key_down"
     assert data["device_descriptor"] == "/dev/input/event2"
 
     # Test event2 key_hold automatically generated
     signal.clear()
     await asyncio.wait_for(signal.wait(), 0.015)  # wait at least emulate_key_hold_delay
-    assert data["key_code"] == 30
+    assert data["key_code"] == KEY_F1
     assert data["type"] == "key_hold"
     assert data["device_descriptor"] == "/dev/input/event2"
 
     # Test event2 key_up
     signal.clear()
-    mock_manager.create_evdev_event("/dev/input/event2", 30, KEY_UP)
+    mock_manager.create_evdev_event("/dev/input/event2", KEY_F1, KEY_UP)
     await asyncio.wait_for(signal.wait(), 0.2)
-    assert data["key_code"] == 30
+    assert data["key_code"] == KEY_F1
     assert data["type"] == "key_up"
     assert data["device_descriptor"] == "/dev/input/event2"
 
+    # Ensure coverage when device hold received with emulated hold enabled
+    signal.clear()
+    mock_manager.create_evdev_event("/dev/input/event2", KEY_F1, KEY_HOLD)
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(signal.wait(), 0.05)
+
     # Test event2 key_hold is canceled on teardown
     signal.clear()
-    mock_manager.create_evdev_event("/dev/input/event2", 30, KEY_DOWN)
+    mock_manager.create_evdev_event("/dev/input/event2", KEY_F1, KEY_DOWN)
     await asyncio.wait_for(signal.wait(), 0.2)
 
 
@@ -298,9 +327,9 @@ async def test_device_monitor(
     )
 
     # Baseline event2 key_down check
-    mock_manager.create_evdev_event("/dev/input/event2", 30, KEY_DOWN)
+    mock_manager.create_evdev_event("/dev/input/event2", KEY_F1, KEY_DOWN)
     await asyncio.wait_for(signal.wait(), 0.1)
-    assert data["key_code"] == 30
+    assert data["key_code"] == KEY_F1
     assert data["device_descriptor"] == "/dev/input/event2"
 
     # Disconnect /dev/input/event2
@@ -310,7 +339,7 @@ async def test_device_monitor(
 
     # Test event2 key_down ignored (since event2 no longer being listened to)
     signal.clear()
-    mock_manager.create_evdev_event("/dev/input/event2", 30, KEY_DOWN)
+    mock_manager.create_evdev_event("/dev/input/event2", KEY_F1, KEY_DOWN)
     with pytest.raises(asyncio.TimeoutError):
         await asyncio.wait_for(signal.wait(), 0.05)
 
@@ -320,9 +349,9 @@ async def test_device_monitor(
 
     # Test event2 key_down works again
     signal.clear()
-    mock_manager.create_evdev_event("/dev/input/event2", 30, KEY_DOWN)
+    mock_manager.create_evdev_event("/dev/input/event2", KEY_F1, KEY_DOWN)
     await asyncio.wait_for(signal.wait(), 0.2)
-    assert data["key_code"] == 30
+    assert data["key_code"] == KEY_F1
     assert data["device_descriptor"] == "/dev/input/event2"
 
     # Test events for inputs not in config are ignored
