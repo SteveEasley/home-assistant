@@ -77,7 +77,7 @@ async def async_setup_entry(
             cv.make_entity_service_schema(
                 {vol.Required(ATTR_MEDIA_VOLUME_LEVEL): cv.small_float}
             ),
-            lambda v: (v.update({"volume": v.pop(ATTR_MEDIA_VOLUME_LEVEL)}) or v),
+            lambda v: v.update({"volume": v.pop(ATTR_MEDIA_VOLUME_LEVEL)}) or v,
         ),
         "async_set_volume_level",
     )
@@ -88,7 +88,7 @@ async def async_setup_entry(
             cv.make_entity_service_schema(
                 {vol.Required(ATTR_MEDIA_VOLUME_MUTED): cv.boolean}
             ),
-            lambda v: (v.update({"mute": v.pop(ATTR_MEDIA_VOLUME_MUTED)}) or v),
+            lambda v: v.update({"mute": v.pop(ATTR_MEDIA_VOLUME_MUTED)}) or v,
         ),
         "async_mute_volume",
     )
