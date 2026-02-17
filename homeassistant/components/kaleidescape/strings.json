@@ -106,5 +106,27 @@
         "name": "Video mode"
       }
     }
+  },
+  "services": {
+    "volume_mute": {
+      "description": "Updates the displayed mute state in listening Kaleidescape apps.",
+      "fields": {
+        "is_volume_muted": {
+          "description": "[%key:component::media_player::services::volume_mute::fields::is_volume_muted::description%]",
+          "name": "[%key:component::media_player::services::volume_mute::fields::is_volume_muted::name%]"
+        }
+      },
+      "name": "[%key:component::media_player::services::volume_mute::name%]"
+    },
+    "volume_set": {
+      "description": "Updates the displayed volume level in listening Kaleidescape apps.",
+      "fields": {
+        "volume_level": {
+          "description": "[%key:component::media_player::services::volume_set::fields::volume_level::description%]",
+          "name": "[%key:component::media_player::services::volume_set::fields::volume_level::name%]"
+        }
+      },
+      "name": "[%key:component::media_player::services::volume_set::name%]"
+    }
   }
 }
